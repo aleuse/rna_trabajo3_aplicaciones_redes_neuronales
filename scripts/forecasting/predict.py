@@ -5,76 +5,96 @@ from tensorflow.keras.models import load_model
 
 # Rutas de archivos
 MODEL_PATH = "./models/forecasting/model.keras"
-SCALER_FEATURES_PATH = "./models/forecasting/scaler_features.pkl"
-SCALER_TARGET_PATH = "./models/forecasting/scaler_target.pkl"
+SCALER_PATH = "./models/forecasting/scaler.pkl"
 OUTPUT_PATH = "./data/output/forecasting/predictions.csv"
-DATA_PATH = "./data/input/forecasting/new_data.csv"  
-STEPS_AHEAD = 5
+DATA_PATH = "./data/input/forecasting/data_processed.csv"  
+STEPS_AHEAD = 30
 
 # Cargar el modelo
 model = load_model(MODEL_PATH)
 
 # Cargar los escaladores entrenados
-with open(SCALER_FEATURES_PATH, "rb") as file:
-    scaler_features = pickle.load(file)
-with open(SCALER_TARGET_PATH, "rb") as file:
-    scaler_target = pickle.load(file)
+with open(SCALER_PATH, "rb") as file:
+    scaler = pickle.load(file)
 
-# Cargar los datos nuevos
+def prepare_data(df):
+	# Convert weekly data to daily using linear interpolation
+	df = df.copy()
+	df['Date'] = pd.to_datetime(df['Date'])
+	
+	# Aggregate sales across all stores and departments
+	df = df.groupby('Date')['Weekly_Sales'].sum().reset_index()
+	
+	# Create daily dates
+	daily_dates = pd.date_range(df['Date'].min(), df['Date'].max(), freq='D')
+	daily_df = pd.DataFrame({'Date': daily_dates})
+	
+	# Merge with original data
+	daily_df = daily_df.merge(df, on='Date', how='left')
+	
+	# Interpolate missing values
+	daily_df['Weekly_Sales'] = daily_df['Weekly_Sales'].interpolate(method='linear')
+	
+	return daily_df
+
+def prepare_features(df, scaler):
+    """Prepara y escala las características para el modelo."""
+    # Solo escalar Weekly_Sales
+    scaled_features = scaler.transform(df[["Weekly_Sales"]])
+    return scaled_features
+
+def recursive_predict(model, initial_sequence, n_steps, future_features, scaler):
+    """Realiza predicciones recursivas."""
+    predictions = []
+    current_sequence = initial_sequence.copy()
+    
+    for i in range(n_steps):
+        # Predicción
+        next_pred = model.predict(current_sequence.reshape(1, *current_sequence.shape), verbose=0)[0]
+        predictions.append(next_pred)
+        
+        # Actualizar secuencia
+        current_sequence = np.roll(current_sequence, -1, axis=0)
+        current_sequence[-1] = next_pred
+    
+    return np.array(predictions)
+
+def predict_future(df, model, scaler, last_date, n_days):
+    """Genera predicciones futuras."""
+    if isinstance(last_date, str):
+        last_date = pd.to_datetime(last_date)
+    
+    # Preparar datos históricos
+    daily_df = prepare_data(df)
+    daily_df = daily_df[daily_df['Date'] <= last_date]
+    
+    # Crear fechas futuras
+    future_dates = pd.date_range(
+        start=last_date + pd.Timedelta(days=1),
+        periods=n_days,
+        freq='D'
+    )
+    
+    # Escalar características
+    scaled_features = prepare_features(daily_df, scaler)
+    initial_sequence = scaled_features[-30:]  # Use last 30 days
+    
+    # Hacer predicciones
+    predictions = recursive_predict(model, initial_sequence, n_days, None, scaler)
+    predictions_rescaled = scaler.inverse_transform(predictions.reshape(-1, 1))[:, 0]
+    
+    return pd.DataFrame({
+        'Date': future_dates,
+        'Predicted_Sales': predictions_rescaled
+    })
+
+# Cargar los datos 
 data = pd.read_csv(DATA_PATH)
-data["Date"] = pd.to_datetime(data["Date"])
-data['weekday'] = data['Date'].dt.weekday
-data['month'] = data['Date'].dt.month
-data.set_index("Date", inplace=True)
-data.fillna(method='ffill', inplace=True)
+# Asegurar que la columna Date esté en formato datetime
+data['Date'] = pd.to_datetime(data['Date'])
 
-# Seleccionar las mismas características usadas en entrenamiento
-features = ["Temperature", "Fuel_Price", "CPI", "Unemployment", "IsHoliday", "Size", "weekday", "month"]
+df_predictions = predict_future(data, model, scaler, data['Date'].max(), STEPS_AHEAD)
 
-# Asegurar consistencia en las columnas
-data = data[features]
-
-# Escalar los datos de entrada
-data_scaled = scaler_features.transform(data) 
-
-# Tomar solo las últimas 30 semanas para la predicción
-sequence_length = 30
-last_sequence = data_scaled[-sequence_length:]
-
-# Verificar forma de entrada
-num_features = last_sequence.shape[1]  # Debe coincidir con el entrenamiento
-# Verificar que tenga la forma correcta
-if last_sequence.shape != (sequence_length, last_sequence.shape[1]):
-    raise ValueError(f"La forma de 'last_sequence' es incorrecta: {last_sequence.shape}, debería ser {(sequence_length, len(features))}.")
-
-
-# Función para predecir los próximos 30 valores
-def predict_future(model, last_sequence, steps_ahead, scaler_target):
-    future_predictions = []
-    input_seq = last_sequence.copy()
-
-    for _ in range(steps_ahead):
-        # Hacer una predicción
-        pred = model.predict(input_seq.reshape(1, sequence_length, -1))[0, 0]
-
-        # Guardar la predicción
-        future_predictions.append(pred)
-
-        # Actualizar la secuencia eliminando el primer elemento y agregando la nueva predicción
-        next_input = np.hstack(([pred], input_seq[-1, 1:]))  # Mantiene las demás características
-        input_seq = np.vstack((input_seq[1:], next_input))
-
-    # Desescalar las predicciones
-    return scaler_target.inverse_transform(np.array(future_predictions).reshape(-1, 1))
-
-# Predecir los próximos 5 valores
-predicted_sales = predict_future(model, last_sequence, STEPS_AHEAD, scaler_target)
-
-# Guardar las predicciones en un CSV
-df_predictions = pd.DataFrame({
-    "Date": pd.date_range(start=data.index[-1] + pd.Timedelta(weeks=1), periods=STEPS_AHEAD, freq="W"),
-    "Predicted_Weekly_Sales": predicted_sales.flatten()
-})
 df_predictions.to_csv(OUTPUT_PATH, index=False)
 
 print(f"Predicciones guardadas en {OUTPUT_PATH}")
