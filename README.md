@@ -114,6 +114,85 @@ Desarrollar un sistema inteligente basado en aprendizaje profundo que integre la
 ### Clasificación Automática de Productos
 
 ### Recomendación Personalizada
+#### 📝 Análisis Exploratorio de Datos
+- **Ubicación:** [`notebooks/forecasting/1_exploracion.ipynb`](notebooks/forecasting/1_exploracion.ipynb) 
+- **Descripción:**
+  - Análisis de series temporales de ventas semanales.
+  - Identificación de tendencias y estacionalidad.
+  - Análisis de variables predictoras (*temperatura, precio combustible, CPI, etc.*).
+  - Preprocesamiento y limpieza de datos.
+
+#### 🤖 Modelado y Evaluación
+- **Ubicación:** [`notebooks/forecasting/2_modelado.ipynb`](notebooks/forecasting/2_modelado.ipynb) 
+- **Descripción:**
+  - Implementación de modelo **SARIMA**.
+  - Desarrollo de modelos de redes neuronales (**LSTM, GRU**).
+  - Evaluación comparativa de modelos.
+  - Análisis de predicciones.
+
+#### 📊 Script de Entrenamiento 
+- **Ubicación:** [`scripts/forecasting/train_model.py`](scripts/forecasting/train_model.py) 
+- **Descripción:**
+  - Script de entrenamiento del modelo.
+  - Utilidades de preprocesamiento.
+
+#### 📊 Script de Predicción 
+- **Ubicación:** [`scripts/forecasting/train_model.py`](scripts/forecasting/train_model.py) 
+- **Descripción:**
+  - Script de predicción para nuevos datos.
+  - Utilidades de graficación.
+
+### Clasificación Automática de Productos
+
+### Recomendación Personalizada
+
+### 🌐 **Aplicación Web**
+- **Ubicación:** https://github.com/dagonzalezji/recomendador-streamlit.git 
+- **Descripción:** 
+  - Aplicación web desarrollada con Streamlit.
+  - Permite a los usuarios interactuar con las soluciones desarrolladas.
+
+---
+
+## ⚙️ Requisitos del Sistema
+- **Lenguaje:** Python 3.10+
+- **Librerías principales:**
+  - `TensorFlow` (para redes neuronales)
+  - `Pandas` y `NumPy` (para análisis de datos)
+  - `Scikit-learn` (para preprocesamiento y evaluación)
+  - `Statsmodels` (para modelos SARIMA)
+- Ver el archivo [`requirements.txt`](requirements.txt) para más detalles.
+
+---
+
+
+## 🚀 Cómo Ejecutar el Proyecto
+
+1. **Clonar el repositorio:**
+   ```bash
+   git clone https://github.com/aleuse/rna_trabajo3_aplicaciones_redes_neuronales.git
+   cd rna_trabajo3_aplicaciones_redes_neuronales
+   ```
+
+2. **Crear y activar entorno virtual:**
+   ```bash
+    python -m venv venv
+    source venv/bin/activate  # En Mac/Linux
+    venv\Scripts\activate     # En Windows
+   ```
+
+3. **Instalar dependencias:**
+    ```bash
+    pip install -r requirements.txt
+   ```
+
+### Predicción de Demanda
+
+1. **Entrenar modelo**:
+    ```bash
+    python scripts/recommendation/modelado.py
+   ```
+
 
 ### Aplicación Web
 
