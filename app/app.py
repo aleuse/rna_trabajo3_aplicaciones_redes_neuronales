@@ -35,86 +35,75 @@ def load_forecasting_objects():
         os.path.join(MODELS_DIR, "forecasting", "modelo_forecasting.keras")
     )
     with open(
-        os.path.join(MODELS_DIR, "forecasting", "scaler_features_forecasting.pkl"), "rb"
+        os.path.join(MODELS_DIR, "forecasting", "scaler_forecasting.pkl"), "rb"
     ) as file:
-        scaler_features = pickle.load(file)
-    with open(
-        os.path.join(MODELS_DIR, "forecasting", "scaler_target_forecasting.pkl"), "rb"
-    ) as file:
-        scaler_target = pickle.load(file)
+        scaler = pickle.load(file)
 
-    return model, scaler_features, scaler_target
+    return model, scaler
 
+def prepare_data(df):
+	# Convert weekly data to daily using linear interpolation
+	df = df.copy()
+	df['Date'] = pd.to_datetime(df['Date'])
+	
+	# Aggregate sales across all stores and departments
+	df = df.groupby('Date')['Weekly_Sales'].sum().reset_index()
+	
+	# Create daily dates
+	daily_dates = pd.date_range(df['Date'].min(), df['Date'].max(), freq='D')
+	daily_df = pd.DataFrame({'Date': daily_dates})
+	
+	# Merge with original data
+	daily_df = daily_df.merge(df, on='Date', how='left')
+	
+	# Interpolate missing values
+	daily_df['Weekly_Sales'] = daily_df['Weekly_Sales'].interpolate(method='linear')
+	
+	return daily_df
 
-def load_forecasting_data(data_path, scaler_features):
-    # Cargar los datos nuevos
-    data = pd.read_csv(data_path)
-    data["Date"] = pd.to_datetime(data["Date"])
-    data["weekday"] = data["Date"].dt.weekday
-    data["month"] = data["Date"].dt.month
-    data.set_index("Date", inplace=True)
-    data.fillna(method="ffill", inplace=True)
+def prepare_features(df, scaler):
+    """Prepara y escala las características para el modelo."""
+    # Solo escalar Weekly_Sales
+    scaled_features = scaler.transform(df[["Weekly_Sales"]])
+    return scaled_features
 
-    # Seleccionar las mismas características usadas en entrenamiento
-    features = [
-        "Temperature",
-        "Fuel_Price",
-        "CPI",
-        "Unemployment",
-        "IsHoliday",
-        "Size",
-        "weekday",
-        "month",
-    ]
+def recursive_predict(model, initial_sequence, n_steps, future_features, scaler):
+    """Realiza predicciones recursivas."""
+    predictions = []
+    current_sequence = initial_sequence.copy()
+    
+    for i in range(n_steps):
+        # Predicción
+        next_pred = model.predict(current_sequence.reshape(1, *current_sequence.shape), verbose=0)[0]
+        predictions.append(next_pred)
+        
+        # Actualizar secuencia
+        current_sequence = np.roll(current_sequence, -1, axis=0)
+        current_sequence[-1] = next_pred
+    
+    return np.array(predictions)
 
-    # Asegurar consistencia en las columnas
-    temp = data[features]
-
-    # Escalar los datos de entrada
-    data_scaled = scaler_features.transform(temp)
-
-    # Tomar solo las últimas 30 semanas para la predicción
-    last_sequence = data_scaled[-sequence_length:]
-
-    return data, last_sequence
-
-
-# Función para predecir los próximos valores
-def make_forecasting_predictions(
-    model, last_sequence, steps_ahead, scaler_target, data
-):
-    future_predictions = []
-    input_seq = last_sequence.copy()
-
-    for _ in range(steps_ahead):
-        # Hacer una predicción
-        pred = model.predict(input_seq.reshape(1, sequence_length, -1))[0, 0]
-
-        # Guardar la predicción
-        future_predictions.append(pred)
-
-        # Actualizar la secuencia eliminando el primer elemento y agregando la nueva predicción
-        next_input = np.hstack(
-            ([pred], input_seq[-1, 1:])
-        )  # Mantiene las demás características
-        input_seq = np.vstack((input_seq[1:], next_input))
-
-    # Desescalar las predicciones
-    predicted_sales = scaler_target.inverse_transform(
-        np.array(future_predictions).reshape(-1, 1)
+def predict_future(scaled_features, model, scaler, last_date, n_days):
+    """Genera predicciones futuras."""    
+    # Crear fechas futuras
+    future_dates = pd.date_range(
+        start=last_date + pd.Timedelta(days=1),
+        periods=n_days,
+        freq='D'
     )
+    
+    # Escalar características
+    initial_sequence = scaled_features[-30:]  # Use last 30 days
+    
+    # Hacer predicciones
+    predictions = recursive_predict(model, initial_sequence, n_days, None, scaler)
+    predictions_rescaled = scaler.inverse_transform(predictions.reshape(-1, 1))[:, 0]
+    
+    return pd.DataFrame({
+        'Date': future_dates,
+        'Predicted_Sales': predictions_rescaled
+    })
 
-    df_predictions = pd.DataFrame(
-        {
-            "Date": pd.date_range(
-                start=data.index[-1] + pd.Timedelta(weeks=1),
-                periods=steps_ahead,
-                freq="W",
-            ),
-            "Predicted_Weekly_Sales": predicted_sales.flatten(),
-        }
-    )
-    return df_predictions
 
 
 # Configuración de la página
@@ -148,67 +137,51 @@ if "page" in st.session_state and st.session_state["page"] == "prediccion":
     st.subheader("📈 Predicción de Demanda")
 
     # Cargar objetos
-    model, scaler_features, scaler_target = load_forecasting_objects()
+    model, scaler = load_forecasting_objects()
 
-    # Cargar data
-    data, last_sequence = load_forecasting_data(
-        os.path.join(DATA_DIR, "forecasting", "data.csv"), scaler_features
-    )
+    # Cargar los datos 
+    data = pd.read_csv(os.path.join(DATA_DIR, "forecasting", "data.csv"))
+    # Asegurar que la columna Date esté en formato datetime
+    data['Date'] = pd.to_datetime(data['Date'])
+    last_date = data['Date'].max()
+    
+    # Preparar datos históricos
+    daily_df = prepare_data(data)
+    daily_df = daily_df[daily_df['Date'] <= last_date]
+    scaled_features = prepare_features(daily_df, scaler)
 
-    # Input de usuario para número de semanas a predecir
+    # Input de usuario para número de días a predecir
     steps = st.slider(
-        "Selecciona el número de semanas predecir", min_value=1, max_value=16, value=6
+        "Selecciona el número de días predecir", min_value=1, max_value=60, value=30
     )
 
     # Botón para hacer predicción
     if st.button("Generar Predicción"):
-        forecast = make_forecasting_predictions(
-            model, last_sequence, steps, scaler_target, data
-        )
+        df_predictions = predict_future(scaled_features, model, scaler, last_date, steps)
 
         # Mostrar tabla con predicciones
         st.write("### Tabla de Predicciones")
-        st.dataframe(forecast)
+        st.dataframe(df_predictions)
 
         # Gráfico de predicción
         st.write("### Gráfico de Predicción")
         fig, ax = plt.subplots(figsize=(10, 5))
 
-        # Mostrar solo los últimos 6 meses de datos históricos
-        last_6_months = data.last("26W")  # 26 semanas = ~6 meses
-
-        # Obtener el último punto de los datos históricos
-        last_historical_date = last_6_months.index[-1]
-        last_historical_value = last_6_months["Weekly_Sales"].iloc[-1]
-
-        # Crear un punto de conexión
-        connection_dates = [last_historical_date, forecast["Date"].iloc[0]]
-        connection_values = [
-            last_historical_value,
-            forecast["Predicted_Weekly_Sales"].iloc[0],
-        ]
 
         # Graficar datos originales, conexión y predicción
         ax.plot(
-            last_6_months.index,
-            last_6_months["Weekly_Sales"],
+            daily_df["Date"],
+            daily_df["Weekly_Sales"],
             label="Datos Originales",
             color="black",
         )
-        ax.plot(connection_dates, connection_values, color="blue")
+        # ax.plot(connection_dates, connection_values, color="blue")
         ax.plot(
-            forecast["Date"],
-            forecast["Predicted_Weekly_Sales"],
+            df_predictions["Date"],
+            df_predictions["Predicted_Sales"],
             label="Predicción",
             color="blue",
         )
-
-        # Ajustar límites del eje x usando solo el período relevante
-        all_dates = pd.concat(
-            [pd.Series(last_6_months.index), pd.Series(forecast["Date"])]
-        )
-        ax.set_xlim([all_dates.min(), all_dates.max()])
-
         # Ajustar formato de fechas en eje x
         plt.xticks(rotation=45)
         plt.grid(True, linestyle="--", alpha=0.7)  # Agregar cuadrícula
